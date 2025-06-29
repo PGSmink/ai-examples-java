@@ -1,24 +1,38 @@
 
-# Getting started with AI using Ollama and langchain4j on any laptop
+# Getting started with AI using Ollama and langchain4j on any laptop, part2
 
-If you want to know how to get started with AI in Java, this article will certainly help you to get some experience in
-pragmatically building and running it on your own laptop. 
-Even if your laptop doesn't have a dedicated graphics card.
 
-Features are
-* Chat client written in Java
-* Using langchain4j AI client to connect to an AI server
-* Using langchain4j library only, to build chat app.
-* Using Gradle build automation tool for simple short build file
-* Run locally on your laptop, so no AI account needed (yet)
-* Assumes you've podman container runtime installed (or Docker)
-* Uses Ollama to run the LLM in the container on the CPU.
-* Needs only about 1.4G free memory to load the 637M LLM
+In branch simple-container an application is given that uses testcontainer to start a container to run Ollama and load a LLM automatically at the start of the application.
+This is great for the 'it works out of the box' experience. 
 
-In order to get quickly started, the application uses TestContainer for setting up and running Ollama in a container.
-The AI model loaded in Ollama is tinydolphin, a small model introduced in 2024. This model was selected because of its small size to be able to run it on any laptop.
+However, if you start the application multiple times, each run you've to wait for the model to be loaded what can be annoying.
 
-The application is as follows:
+We are going to change this:
+The solution is to install Ollama and the model only once.
+
+## Install Ollama
+
+First you need to install Ollama locally. At download Ollama (https://ollama.com/download) you will find how to do this.
+Currently, for Linux the installation is:
+```
+curl -fsSL https://ollama.com/install.sh | sh
+```
+(Install curl first, if it's not installed)
+
+## Install LLM in Ollama
+Our application uses the tinydolphin. this can be installed and run using
+```
+ollama run tinydolphin
+```
+This will download the LLM and start a server on end point http://localhost:11434. You can keep this server up and running as long as you want to use it.
+The next time you repeat this command, it will be faster because the LLM is already downloaded on your system.
+
+During the installation of Ollama it was detected what GPU is installed and the amount of memory it has. At the start of the tinydolphin LLM Ollama will decide whether the GPU is used automatically.
+
+## Change to application
+The application must be updated to remove testcontainer code and use http://localhost:11434 as end point. 
+
+The application becomes as follows:
 
 ```
 package eu.smink.ai;
@@ -29,66 +43,37 @@ import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.ollama.OllamaChatModel;
-import org.testcontainers.containers.Container;
-import org.testcontainers.ollama.OllamaContainer;
-
-import java.io.IOException;
 
 public class OllamaChatExample
 {
-    static final String OLLAMA_IMAGE = "ollama/ollama:latest";
     static final String LLM_MODEL = "tinydolphin";
 
     public static void main(String[] args)
     {
-        try (OllamaContainer ollama = new OllamaContainer(OLLAMA_IMAGE))
-        {
-            startLLM(ollama);
+        // Build the ChatModel
+        String endpoint = "http://localhost:11434";
+        ChatModel model = OllamaChatModel.builder()
+                .baseUrl(endpoint)
+                .temperature(0.0)
+                .logRequests(true)
+                .logResponses(true)
+                .modelName(LLM_MODEL)
+                .build();
 
-            // Build the ChatModel
-            String endpoint = ollama.getEndpoint();
-            ChatModel model = OllamaChatModel.builder()
-                    .baseUrl(endpoint)
-                    .temperature(0.0)
-                    .logRequests(true)
-                    .logResponses(true)
-                    .modelName(LLM_MODEL)
-                    .build();
+        // Example 1
+        System.out.println(model.chat("Hi what's your model and role"));
 
-            // Example 1
-            System.out.println(model.chat("Hi what's your model and role"));
-
-            // Example 2
-            ChatMessage systemMessage = new SystemMessage("You are a history student");
-            ChatMessage userMessage = UserMessage.from("Give three German speaking countries in Europe");
-            ChatResponse chatResponse = model.chat(systemMessage, userMessage);
-            System.out.println(chatResponse.aiMessage().text());
-        }
-    }
-
-
-    private static void startLLM(OllamaContainer ollama)
-    {
-        ollama.start();
-
-        try
-        {
-            ollama.execInContainer("ollama", "pull", LLM_MODEL);
-        }
-        catch (IOException | InterruptedException ex)
-        {
-            throw new RuntimeException("Error pulling model", ex);
-        }
+        // Example 2
+        ChatMessage systemMessage = new SystemMessage("You are a history student");
+        ChatMessage userMessage = UserMessage.from("Give three German speaking countries in Europe");
+        ChatResponse chatResponse = model.chat(systemMessage, userMessage);
+        System.out.println(chatResponse.aiMessage().text());
     }
 }
 ```
-A constant OLLAMA_IMAGE (line 16) is defined that contains the container image name to use to run Ollama. At runtime this image uses the LLM_MODEL defined (line 17).
-Line 21/23 start up an Ollama instance running the LLM in the background at the endpoint URL retrieved at line 26.
-Now the LLM is up and running an LLM client is setup at line 27-33. The temperature is set to 0 to have as less hallucination as possible.
-Logging of requests and response is turned on to be able to follow what is happening. The method ```startLLM``` is used to start the LLM in a container so you do not have to configure it manually yourself. 
 
-## Gradle
-The Gradle build file used is as follows:
+## Gradle build script
+The updated Gradle build file is as follows:
 
 ```
 plugins {
@@ -104,56 +89,48 @@ repositories {
 }
 
 dependencies {
-    implementation 'org.testcontainers:ollama:1.21.3'
     implementation 'dev.langchain4j:langchain4j-core:1.1.0'
     implementation 'dev.langchain4j:langchain4j-ollama:1.1.0-rc1'
     implementation 'org.slf4j:slf4j-simple:2.0.17'}
 ```
-First the 'application' plugin is used to compile as a Java application. Secondly, the class is defined that is containing the main application. MavenCentral will be used to retrieve the dependencies are defined at the end.
-The testcontainers dependency is defined because the application uses a test container to run Ollama in a container. The next two dependencies contains classes needed for the LLM chat client to communicate with the Ollama back-end. The last dependency is a log implementation that results in the request and results to be logged as configured. 
-
-The repository that contains this application and all files needed to build and run, can be found at https://github.com/PGSmink/ai-examples-java.git.
+## Source code
+The repository that contains this application and all files needed to build and run, can be found at https://github.com/PGSmink/ai-examples-java.git, 
+checkout branch **simple-container-external-llm**.
 
 # Build and run
-After checking out this repository you can go to the root directory and build and run
+After checking out this repository and switching branch, you can go to the root directory and build and run
 the application using
 ```
 ./gradlew run
 ```
-(use 'gradlew run' on windows)
+(do not forget to start the LLM before running the application)
 
-The answers are
-## Question 1: Hi what's your model and role
+## Performance
+The execution times for the new application will be similar to the previous, except the delay at the start to load the LLM is gone.
+ 
+You might wonder, is your LLM running on the GPU or CPU? After you've run the application once, you can run
 ```
-I am Dolphin, an AI model that assists in various tasks such as language translation, natural language understanding, and text generation. My primary role is to assist you with any questions or concerns you may have.
+ollama ps
 ```
-## Question 2: Give three German speaking countries in Europe
-For this question an additional system prompt is specified to get an answer assuming you  are a history student.
+to see how it is running.
+For me the output is
 ```
-Sure, here are three German speaking countries in Europe:
+NAME                  ID              SIZE      PROCESSOR    UNTIL              
+tinydolphin:latest    0f9dd11f824c    1.4 GB    100% CPU     4 minutes from now    
+```
+So it's running on the CPU for 100%.
 
-1. Germany: This is the most popular and well-known country for German language speakers. It's located in Central Europe and has a rich history of culture and art. The official language is German, but there are also many other languages spoken, such as Alsatian, Bavarian, and Sorbian.
-2. Austria: Another popular German speaking country, Austria is located in Central Europe and has a rich history of music, literature, and architecture. The official language is German, but there are also many other languages spoken, such as Czech, Hungarian, and Slovene.
-3. Switzerland: Switzerland is another European country known for its strong German influence. It's located in Western Europe and has a rich history of culture and art. The official language is German, but there are also many other languages spoken, such as French, Italian, and Romansh.
-```
+The download size is not the same at size at runtime.
 
-# Timing
-On my Framework laptop (with intel 12th gen) it takes about
-* 22 seconds to start the LLM model
-* 2 seconds for the first answer
-* 4 seconds for the second answer
-
-So it takes some time to bootstrap the LLM, but the answers are given relative fast. As could be expected, adding a system prompt and asking more complex questions results in longer execution times.
-The timings are with the LLM running on the CPU. If it runs in a more complex setup on a GPU, it will be much faster.
+Ollama does pause an LLM if it's not used for some time. If the ps output is empty, you need to run the application again.
 
 ## Summary
-So now you have a simple application to chat with a LLM using Java.
-TinyDolphin is a simple experimental LLM model. Probable not fast enough to be used in applications, but fast enough to do these kind of experiments to get understanding how it works.
+Now you have to start Ollama with the used LLM manually, before the first run of the application. This saves considerable time when experimenting.
 
 ## Exercises
-* Experiment with different prompts 
-* Experiment with different system prompts 
-* Experiment with a more advanced llama3 model, find its exact model name and check the output. 
+You can run also different LLMs, see https://ollama.com/search. Small models most likely do work on your laptop. If the LLM is large,
+* you need to have free memory to load it
+* you need to have a GPU with sufficient graphical memory for most large models in order to get answers in reasonable time.
 
 
 # See also
@@ -162,4 +139,4 @@ TinyDolphin is a simple experimental LLM model. Probable not fast enough to be u
 * https://docs.langchain4j.dev/integrations/language-models/ollama
 * https://ollama.com/library/tinydolphin
 * https://github.com/ollama/ollama
-* https://java.testcontainers.org
+* https://ollama.com/search for models
