@@ -1,17 +1,26 @@
 package eu.smink.ai;
 
-import dev.langchain4j.data.message.ChatMessage;
-import dev.langchain4j.data.message.SystemMessage;
+import dev.langchain4j.agent.tool.ToolSpecification;
+import dev.langchain4j.agent.tool.ToolSpecifications;
+import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.listener.ChatModelListener;
+import dev.langchain4j.model.chat.request.ChatRequest;
+import dev.langchain4j.model.chat.request.ChatRequestParameters;
+import dev.langchain4j.model.chat.request.ResponseFormat;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.ollama.OllamaChatModel;
+import dev.langchain4j.service.AiServiceContext;
 import dev.langchain4j.service.AiServices;
+import dev.langchain4j.service.tool.ToolExecutor;
+import dev.langchain4j.service.tool.ToolServiceContext;
+import dev.langchain4j.service.tool.ToolServiceResult;
 
 import java.time.Duration;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
+import java.util.Map;
 
 public class OllamaChatExample
 {
@@ -24,7 +33,6 @@ public class OllamaChatExample
     );
     private static final ChatStopWatch stopWatch = new ChatStopWatch();
 
-
     public static void main(String[] args)
     {
         // Build the ChatModel
@@ -36,30 +44,26 @@ public class OllamaChatExample
                 .logResponses(true)
                 .modelName(LLM_MODEL)
                 .listeners(List.of(costCalculator, requestMessageLogger, stopWatch))
-                .timeout(Duration.of(10, ChronoUnit.MINUTES))
                 .build();
 
         Assistant assistant = AiServices.builder(Assistant.class)
                 .chatModel(model)
-                .tools(
-                        new ConferenceTool()
-                )
+                .tools(new ConferenceTool())
                 .build();
 
         // Example 1
-        String answer = model.chat("Hi what's your model and role");
-        System.out.println(answer);
+        System.out.println(model.chat("Hi what's your model and role"));
 
         // Example 2
-        ChatMessage systemMessage = new SystemMessage("You are a history student");
-        ChatMessage userMessage = UserMessage.from("Give three German speaking countries in Europe");
-        ChatResponse chatResponse = model.chat(systemMessage, userMessage);
-        System.out.println(chatResponse.aiMessage().text());
+        Assistant assistantWithPrompt = AiServices.builder(Assistant.class)
+                .chatModel(model)
+                .systemMessageProvider(obj -> "You are a history student")
+                .tools(new ConferenceTool())
+                .build();
+        System.out.println(assistantWithPrompt.chat("Give three German-speaking countries in Europe"));
 
-        System.out.println(assistant.chat("Get me a list of cool conference talks"));
-
-        System.out.println(assistant.chat("Get me a list of cool conference talks in 2025"));
-
+        // Example 3
+        System.out.println(assistant.chat("Get me a list of cool conference talks in 2024"));
 
         costCalculator.printReport();
     }

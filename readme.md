@@ -1,223 +1,224 @@
+# Getting started with MCP, AI using Ollama and langchain4j
 
-# Getting started with AI using Ollama and langchain4j on any laptop, part3 costs
-
-This branch I will add more logging and reporting to the application given in branch **external-tinydolphin-llm**.
-In order to get more insight, the following is added:
-* Logging of duration of each chat call,
-* Logging of input messages,
-* Reporting of costs per chat call and in total.
-
-# Chat duration
-For this we could add logging around the actual chat calls, but there is a better way to do this.
-It is possible to register a listener on a **ChatModel** instance, that has methods called at the begin (request) and the end (response) of a chat call.
-The interface is as follows
+This branch I shall develop on top of branch **external-tinydolphin-llm** and will add MCP tools.
+MCP, https://modelcontextprotocol.io/overview is the next step to add tools to AI. As stated on their site, 
 ```
-interface ChatModelListener {
-   void onRequest(ChatModelRequestContext requestContext);
-   void onResponse(ChatModelResponseContext responseContext);
-}
+MCP provides a secure, standardized, simple way to give AI systems the context they need.
 ```
-the implementation to log the duration is as follows:
+MCP allows you to build your own MCP server or one of many already out there.
+The use case for this story is that 
+  * Use chat client application as found in branch **external-tinydolphin-llm** as starting point
+  * Information stored in the chat client application itself shall be made accessible
+  * Use MCP for this, as it's a new standard 
+  * The new MCP tool can run in the same application as the AI client and will return a list of conference talks, optionally for a given year.
+
+## Pick LLM
+Als a result of the last requirement, I'm not going to build a remote MCP tool, but a local MCP tool running in the same application as the AI client.
+Not all LLM's support MCP right now. In the previous branch **external-tinydolphin-llm**, the TinyDolphin LLM was used, but that does not support MCP.
+An LLM dat does support MCP is qwen2:7b:
+* 7.6 billion parameters
+* needs 5.1G memory
+* Supports English language
+* supports native MCP 
+* has Apache 2.0 license
+* Created by Alibaba, and still can run locally on a laptop.
+
+## Needed dependencies
+Two dependencies are added to the build.gradle
 ```
-package eu.smink.ai;
+    implementation 'io.modelcontextprotocol.sdk:mcp:0.10.0'
+    implementation 'dev.langchain4j:langchain4j-mcp:1.1.0-beta7'
+```
 
-import dev.langchain4j.model.chat.listener.*;
-import java.time.Instant;
+The first is the implementation of the protocol, the second is the implementation to integrate it into langchain4j.
 
-public class ChatStopWatch implements ChatModelListener
+## Outline code
+Since last version a AiServices class is added that hides code no longer needs to be written. It requires an Ai service interface (with any name) that it will implement for you:
+```java
+public interface Assistant
 {
-    private Instant instantStart;
-
-    @Override
-    public void onRequest(ChatModelRequestContext requestContext)
-    {
-        instantStart = Instant.now();
-    }
-
-
-    @Override
-    public void onResponse(ChatModelResponseContext responseContext)
-    {
-        Instant instantEnd = Instant.now();
-        long seconds = instantEnd.getEpochSecond() - instantStart.getEpochSecond();
-        System.out.println("Chat took " + seconds + " seconds\n");
-    }
+    String chat(String userMessage);
 }
 ```
-This will log the duration of each chat call after it is registered on the ChatModel instance.
-
-## Logging of input messages
-This  logging gives insight in all system (system prompt) and user messages (the actual question) used in a single request.
-Again, these messages can be logged using the **ChatModelListener** interface, in the **onRequest** method.
-The implementation is as follows
+The AI service is created using:
+```java
+Assistant assistant = AiServices.builder(Assistant.class)
+                .chatModel(model)
+                .tools(new YourTool1(), new YourTool2(), ... new YourToolN())
+                .build();
 ```
+Where **model** is the **OllamaChatModel** instance configured to use the qwen2 LLM.
+It can be used like:
+```java
+        System.out.println(assistant.chat("Sentence to call one of the N tools..."));
+```
+By default the LLM can choose whether or not to use tools. 
+It can be forced to use the tools alway (using ToolChoice.REQUIRED), 
+but that is not supported by the qwen2 LLM: I did not use this option. 
+
+## Conference Tool code
+Lets implement the ConferenceTool in the existing application.
+The ConferenceTool will list conference talks (inspired by https://github.com/danvega/javaone-mcp).
+Each conference talk is stored in a record:
+```java
 package eu.smink.ai;
 
-import dev.langchain4j.model.chat.listener.*;
+public record ConferenceTalk(String title, String url, String conference, int year) {}
+```
+A talk has a title, a URL, the name of the conference where it was recorded and the year of recording.
 
-public class RequestMessageLogger implements ChatModelListener
+This corresponding Tool class is like:
+```java
+package eu.smink.ai;
+
+import dev.langchain4j.agent.tool.Tool;
+import io.modelcontextprotocol.spec.McpSchema;
+
+import java.util.*;
+
+public class ConferenceTool
 {
-    @Override
-    public void onRequest(ChatModelRequestContext requestContext)
+    private static final List<ConferenceTalk> talks = new ArrayList<>();
+    static
     {
-        ChatModelListener.super.onRequest(requestContext);
-        System.out.println("Chat input messages:");
-        requestContext.chatRequest()
-              .messages()
-              .forEach(
-                 chatMessage -> System.out.println("     " + chatMessage)
-              );
+        ConferenceTalk accessibility = new ConferenceTalk("We need you - Accessibility on web by Ramona Domen", "https://www.youtube.com/watch?v=RmWdw6k3xf0&list=PLpQuPreMkT6B9KypJdLDEruwbc1bWFxoL&index=27", "NLJug - J-Fall", 2024);
+        ConferenceTalk hexagonal = new ConferenceTalk("Hexagonal Architecture in Practice, Live Coding That Will Make Your Applications More Sustainable ", "https://www.youtube.com/watch?v=YPmKHm7G19Q", "Devoxx Belgium", 2025);
+        ConferenceTalk c4Model = new ConferenceTalk("C4 models as code By Simon Brown", "https://www.youtube.com/watch?v=LYzOc7vI-Uo", "Devoxx Belgium", 2025);
+
+        talks.addAll(List.of(accessibility, hexagonal, c4Model));
+    }
+
+    @Tool("Get list of cool conference talks")
+    public static McpSchema.CallToolResult getConferenceTalks()
+    {
+        List<McpSchema.Content> contents = new ArrayList<>();
+        talks.stream()
+                .map(Record::toString)
+                .map(McpSchema.TextContent::new)
+                .forEach(contents::add);
+        return new McpSchema.CallToolResult(contents, false);
     }
 }
 ```
 
-## Reporting of costs per call and in total
+The conference talks are stored in a static list. A  **getConferenceTalks** method is annotated with a **Tool** annotation containing the description, to be used in the LLM to select this tool.
+The method returns a **CallToolResult** instance containing a list of **Context** objects, representing a table. The table could also be returned as a **String**, but by returning a **CallToolResult**, the output will be passed as a json string to the LLM.
+That and makes it easier for the LLM to filter on columns.
 
-Ofcouse there are no direct costs involved when running local. 
-But if you intend to, or are already using, an AI provider in the cloud it good to have insights in the costs involved.
-Disclaimer: costs charged by an AI provider can slightly deviate from costs calculated. 
+The Tool method can have arguments. Let assume the tools should allow to filter on the year of the talk:
 
-There is a little complication, that in the current application the following two chat methods are used:
-```
-String ChatModel#chat(String message);
-ChatResponse ChatModel#chat(ChatMessage ... messages);
-```
-The costs can be found in the ChatResponse object returned by the second method. 
-But for the first method it is not possible to derive the costs.
-To calculate the costs for both methods, again the  **ChatModelListener** interface can be used.
-The implementation will also keep track of the overall totals, so they can be printed in a report at the end.
+```java
 
-The implementation is as follows:
-```
-package eu.smink.ai;
-
-import dev.langchain4j.model.chat.listener.*;
-import dev.langchain4j.model.output.TokenUsage;
-
-public class CostCalculator implements ChatModelListener
+/**
+ * gets list of conferences, for a given year
+ *
+ * @param year {@code year of conference}
+ * @return CallToolResult containing matching talks
+ */
+@Tool("Get list of cool conference talks in year")
+public static McpSchema.CallToolResult getConferenceTalks(Integer year)
 {
-    private final double costPerInputTokenInCents;
-    private final double costPerOutputTokenInCents;
-    private final String currencyInCents;
-    private long totalNrOfInputTokens = 0L;
-    private long totalNrOfOutputTokens = 0L;
-    private long totalNrOfCalls = 0L;
-    private double totalInputCosts = 0d;
-    private double totalOutputCosts = 0d;
-
-    public CostCalculator(double costPerInputTokenInCents, double costPerOutputTokenInCents, String currency)
-    {
-        this.costPerInputTokenInCents = costPerInputTokenInCents;
-        this.costPerOutputTokenInCents = costPerOutputTokenInCents;
-        currencyInCents = "ct (" + currency + ")";
-    }
-
-    public double getTotalCosts()
-    {
-        return totalInputCosts + totalOutputCosts;
-    }
-
-    public double getTotalInputCosts()
-    {
-        return totalInputCosts;
-    }
-
-    public long getTotalNrOfCalls()
-    {
-        return totalNrOfCalls;
-    }
-
-    public long getTotalNrOfInputTokens()
-    {
-        return totalNrOfInputTokens;
-    }
-
-    public long getTotalNrOfOutputTokens()
-    {
-        return totalNrOfOutputTokens;
-    }
-
-    public long getTotalNrTokens()
-    {
-        return totalNrOfInputTokens + totalNrOfOutputTokens;
-    }
-
-    public double getTotalOutputCosts()
-    {
-        return totalOutputCosts;
-    }
-
-    @Override
-    public void onResponse(ChatModelResponseContext responseContext)
-    {
-        TokenUsage tokenUsage = responseContext.chatResponse().tokenUsage();
-        Integer inputTokenCount = tokenUsage.inputTokenCount();
-        Integer outputTokenCount = tokenUsage.outputTokenCount();
-        Integer total = tokenUsage.totalTokenCount();
-        double estimateCostsInput = inputTokenCount * costPerInputTokenInCents;
-        double estimateCostsOutput = outputTokenCount * costPerOutputTokenInCents;
-        totalNrOfInputTokens += inputTokenCount;
-        totalNrOfOutputTokens += outputTokenCount;
-        totalInputCosts += estimateCostsInput;
-        totalOutputCosts += estimateCostsOutput;
-        totalNrOfCalls++;
-        double estimatedCost = estimateCostsInput + estimateCostsOutput;
-        System.out.println("Call input tokens       : " + inputTokenCount);
-        System.out.println("Call output tokens      : " + outputTokenCount);
-        System.out.println("Call tokens             : " + total);
-        System.out.printf("Call input token costs  : %.04f %s\n", estimateCostsInput, currencyInCents);
-        System.out.printf("Call output token costs : %.04f %s\n", estimateCostsOutput, currencyInCents);
-        System.out.printf("Call token costs        : %.04f %s\n", estimatedCost, currencyInCents);
-    }
-
-    public void printReport()
-    {
-        System.out.println("Total input tokens       : " + getTotalNrOfInputTokens());
-        System.out.println("Total output tokens      : " + getTotalNrOfOutputTokens());
-        System.out.println("Total tokens             : " + getTotalNrTokens());
-        System.out.printf("Total input token costs  : %.04f %s\n", getTotalInputCosts(), currencyInCents);
-        System.out.printf("Total output token costs : %.04f %s\n", getTotalOutputCosts(), currencyInCents);
-        System.out.printf("Total token costs        : %.04f %s\n", getTotalCosts(), currencyInCents);
-        System.out.println("Total calls              : " + getTotalNrOfCalls());
-    }
+    List<McpSchema.Content> contents = new ArrayList<>();
+    talks.stream().filter(talk -> year == null || talk.year() == year)
+            .map(Record::toString)
+            .map(McpSchema.TextContent::new)
+            .forEach(contents::add);
+     new McpSchema.CallToolResult(contents, false);
 }
 ```
-In the constructor the cost per input and output token and the currency is specified. 
-So the user can specify the costs of the current or intended AI provider to be used, including the corresponding currency. 
-
-The code of interest in the implementation given above, is:
+If you check the logs, when running the application, there is a json document describing the tool:
+```json
+{
+  "type" : "function",
+  "function" : {
+    "name" : "getConferenceTalks",
+    "description" : "Get list of cool conference talks in year",
+    "parameters" : {
+      "type" : "object",
+      "properties" : {
+        "arg0" : {
+          "type" : "integer"
+        }
+      },
+      "required" : [ "arg0" ]
+    }
+  }
+}
 ```
-    public void onResponse(ChatModelResponseContext responseContext)
-    {
-        TokenUsage tokenUsage = responseContext.chatResponse().tokenUsage();
-        Integer inputTokenCount = tokenUsage.inputTokenCount();
-        Integer outputTokenCount = tokenUsage.outputTokenCount();
-        Integer total = tokenUsage.totalTokenCount();
-        ...
+If you compare this with https://platform.openai.com/docs/guides/function-calling?api-mode=responses#defining-functions, you can observe the description of the year argument is missing.
+The description can be used my the LLM to decide which tool to call.
+The description can be specified using the **P** annotation for each argument:
+```java
+McpSchema.CallToolResult getConferenceTalks(@P(value = "Year of conference") Integer year)
 ```
-The tokenUsage class has getters for the needed token counts.
-
-The **printreport()** method is called at the end of the application to print a report with all totals.
-
-
-## Changes on application
-All new ChatModelListener implementations have to be registered. 
-
-The new application becomes as follows:
-
+The properties returned now, are:
+```json
+"properties" : {
+      "arg0" : {
+        "type" : "integer",
+        "description" : "Year of conference"
+      }
+    }
 ```
+Al so the name of the year argument is "arg0". The ToolSpecifications are automatically generated using reflection. After debugging, I found that this is actually a compile time issue.
+If the code is compiled with the **-parameters** setting, reflection behaves differently. When this flag is used, the names of method arguments are stored in the compiled code.
+As a result, those method argument names can be read at runtime using reflection.
+
+the following section needs to be added to the **build.gradle** file:
+```
+tasks.withType(JavaCompile) {
+    options.compilerArgs.add("-parameters")
+}
+```
+In new runs the "arg0" parameter name is replaced by "year" and can be used by the LLM.
+
+It is possible to make the year argument optional:
+```java
+McpSchema.CallToolResult getConferenceTalks(@P(value = "Year of conference", required = false) Integer year)
+```
+For me this resulted in problems at runtime: When I did not specify a year, the LLM did set the year parameter to 2023, before calling the tool. I've not tested, if this behaviour is specific for the used Qwen2 LLM.
+
+## Interface Assistant
+In previous versions of the application I did use both available chat methods on the **ChatModel** interface:
+```java
+ChatResponse chat(ChatMessage ... messages);
+String chat(String message);
+```
+Because behaviour is different for these methods.
+Currently, interface Assistant only implements the second method. However, if the interface is changed to the first method, the tool is not called anymore.
+
+## System prompts
+In order to specify a system prompt, you can 
+* code it in the interface Assistant
+* specify it in the AiServices builder.
+An example of the second is as follows:
+```java
+Assistant assistantWithPrompt = AiServices.builder(Assistant.class)
+        .chatModel(model)
+        .systemMessageProvider(obj -> "You are a history student")
+        .tools(new ConferenceTool())
+        .build();
+System.out.println(assistantWithPrompt.chat("Give three German-speaking countries in Europe"));
+```
+
+Tip: When the application is run, the logging contains the system and user prompts used.
+
+## The application
+With all previous described changes, the new application is as follows:
+
+```java
 package eu.smink.ai;
 
-import dev.langchain4j.data.message.*;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.listener.ChatModelListener;
-import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.ollama.OllamaChatModel;
+import dev.langchain4j.service.AiServices;
+
 import java.util.List;
 
 public class OllamaChatExample
 {
-    static final String LLM_MODEL = "tinydolphin";
+    static final String LLM_MODEL = "qwen2:7b"; // 5.1 GiB
     private static final ChatModelListener requestMessageLogger = new RequestMessageLogger();
     private static final CostCalculator costCalculator = new CostCalculator(
             2 / 10000.0, // hypothetical input token price in EURO cents
@@ -239,28 +240,33 @@ public class OllamaChatExample
                 .listeners(List.of(costCalculator, requestMessageLogger, stopWatch))
                 .build();
 
+        Assistant assistant = AiServices.builder(Assistant.class)
+                .chatModel(model)
+                .tools(new ConferenceTool())
+                .build();
+
         // Example 1
-        String answer = model.chat("Hi what's your model and role");
-        System.out.println(answer);
+        System.out.println(model.chat("Hi what's your model and role"));
 
         // Example 2
-        ChatMessage systemMessage = new SystemMessage("You are a history student");
-        ChatMessage userMessage = UserMessage.from("Give three German speaking countries in Europe");
-        ChatResponse chatResponse = model.chat(systemMessage, userMessage);
-        System.out.println(chatResponse.aiMessage().text());
+        Assistant assistantWithPrompt = AiServices.builder(Assistant.class)
+                .chatModel(model)
+                .systemMessageProvider(obj -> "You are a history student")
+                .tools(new ConferenceTool())
+                .build();
+        System.out.println(assistantWithPrompt.chat("Give three German-speaking countries in Europe"));
+
+        // Example 3
+        System.out.println(assistant.chat("Get me a list of cool conference talks in 2024"));
 
         costCalculator.printReport();
     }
 }
 ```
-The three new listeners are created and registered on the **ChatModel**. 
-The constructor of **CostCalculator** needs the costs of input and output token in cents and the currency used.
-
-See for example https://openai.com/api/pricing for pricing when OpenAI is used.
 
 ## Source code
 The repository that contains this application and all files needed to build and run, can be found at https://github.com/PGSmink/ai-examples-java.git, 
-in branch **external-tinydolphin-llm-with-costs**.
+in branch **external-qwen-llm-with-costs-mcp**.
 
 # Build and run
 After checking out this repository and switching branch, you can go to the root directory and build and run
@@ -270,62 +276,23 @@ the application using
 ```
 (do not forget to start the LLM before running the application)
 
-the output is for example
-```
-Chat input messages:
-     UserMessage { name = null contents = [TextContent { text = "Hi what's your model and role" }] }
-Call input tokens       : 37
-Call output tokens      : 46
-Call tokens             : 83
-Call input token costs  : 0.0074 ct (EUR)
-Call output token costs : 0.0368 ct (EUR)
-Call token costs        : 0.0442 ct (EUR)
-Chat took 3 seconds
+# AiServices pros/cons
 
- I am Dolphin, an AI model that assists in various tasks such as text analysis, natural language processing, and machine learning. My primary role is to assist you with any questions or concerns you may have.
+The way the AiServices is implemented now has some drawbacks
+- If you forget to build with **-parameters**, you might get less optimal results without knowing. 
+- Tools are not called, for the chat method returning a **ChatResponse**
+- As soon as you start debugging, code is complex and not easy to read.
 
-
-Chat input messages:
-     SystemMessage { text = "You are a history student" }
-     UserMessage { name = null contents = [TextContent { text = "Give three German speaking countries in Europe" }] }
-Call input tokens       : 29
-Call output tokens      : 221
-Call tokens             : 250
-Call input token costs  : 0.0058 ct (EUR)
-Call output token costs : 0.1768 ct (EUR)
-Call token costs        : 0.1826 ct (EUR)
-Chat took 11 seconds
-
- Sure, here are three German speaking countries in Europe:
-
-1. Germany: This is the most popular and well-known country for German language speakers. It's located in Central Europe and has a rich history of culture, music, and cuisine. The official language is German, but there are also many other languages spoken, such as Alsatian, Bavarian, and Sorbian.
-
-2. Austria: Another well-known country for German speakers, Austria is located in Central Europe and has a rich history of culture, music, and cuisine. The official language is German, but there are also many other languages spoken, such as Czech, Hungarian, and Slovene.
-
-3. Switzerland: Although not a country itself, Switzerland is an important hub for German speakers due to its close proximity to Germany. It's located in Western Europe and has a rich history of culture, music, and cuisine. The official language is German, but there are also many other languages spoken, such as French and Italian.
-
-Total input tokens       : 66
-Total output tokens      : 267
-Total tokens             : 333
-Total input token costs  : 0.0132 ct (EUR)
-Total output token costs : 0.2136 ct (EUR)
-Total token costs        : 0.2268 ct (EUR)
-Total calls              : 2
-```
-
-The output contains logging of time spend and costs per call and a total summary for all calls. 
-
-Also for the second call The SystemMessage and UserMessage are logged that are used for that call.
-
+There is a lot of work in progress, so this might change quickly.
+ 
 ## Summary
-The added request message logger, stop watch and cost calculator make it easier to track input messages used,
-the duration of a chat call and the costs of chat calls executed. 
-They can easily be reused your own langchain4j implementation.
+Qwen2.7B allows it to build and test MCP tools on your local laptop without the need of an AI provider (or internet).
+There are some issues with optional arguments, but that can be worked around using extra tools with a different description.
 
 # See also
 
 * https://docs.langchain4j.dev
 * https://docs.langchain4j.dev/integrations/language-models/ollama
-* https://ollama.com/library/tinydolphin
 * https://github.com/ollama/ollama
-* https://openai.com/api/pricing for example of input/output token pricing
+* https://huggingface.co/Qwen/Qwen2-7B
+* https://github.com/langchain4j/langchain4j

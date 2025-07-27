@@ -6,6 +6,13 @@ application {
     mainClass = "eu.smink.ai.OllamaChatExample"
 }
 
+// Without the -parameter setting reflection does not know the method parameter names using reflection.
+// As a result also the ToolSpecification of a tool with arguments will get "arg0" .. "argn" parameter names
+// This fixed by adding the following code
+tasks.withType(JavaCompile) {
+    options.compilerArgs.add("-parameters")
+}
+
 repositories {
     mavenCentral()
 }

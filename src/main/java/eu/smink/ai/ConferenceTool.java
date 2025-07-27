@@ -24,7 +24,7 @@ public class ConferenceTool
      * gets list of conferences, optionally for a given year
      *
      * @param year {@code year conference}
-     * @return resl
+     * @return CallToolResult
      */
     @Tool("Get list of cool conference talks")
     public static McpSchema.CallToolResult getConferenceTalks(@P(value = "Year of conference", required = false) Integer year)
