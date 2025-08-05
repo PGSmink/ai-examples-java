@@ -1,26 +1,23 @@
 package eu.smink.ai;
 
+import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.agent.tool.ToolSpecification;
 import dev.langchain4j.agent.tool.ToolSpecifications;
 import dev.langchain4j.data.message.AiMessage;
+import dev.langchain4j.data.message.ToolExecutionResultMessage;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.listener.ChatModelListener;
 import dev.langchain4j.model.chat.request.ChatRequest;
-import dev.langchain4j.model.chat.request.ChatRequestParameters;
-import dev.langchain4j.model.chat.request.ResponseFormat;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.ollama.OllamaChatModel;
-import dev.langchain4j.service.AiServiceContext;
 import dev.langchain4j.service.AiServices;
+import dev.langchain4j.service.tool.DefaultToolExecutor;
 import dev.langchain4j.service.tool.ToolExecutor;
-import dev.langchain4j.service.tool.ToolServiceContext;
-import dev.langchain4j.service.tool.ToolServiceResult;
 
 import java.time.Duration;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
-import java.util.Map;
 
 public class OllamaChatExample
 {
@@ -44,27 +41,55 @@ public class OllamaChatExample
                 .logResponses(true)
                 .modelName(LLM_MODEL)
                 .listeners(List.of(costCalculator, requestMessageLogger, stopWatch))
+                .timeout(Duration.of(5, ChronoUnit.MINUTES)) // add some time for slow laptops ;-)
                 .build();
 
+        chatAiServices(model);
+
+        chatEssentials(model);
+
+        costCalculator.printReport();
+    }
+
+
+    private static void chatAiServices(ChatModel model)
+    {
         Assistant assistant = AiServices.builder(Assistant.class)
                 .chatModel(model)
                 .tools(new ConferenceTool())
                 .build();
 
-        // Example 1
-        System.out.println(model.chat("Hi what's your model and role"));
-
-        // Example 2
-        Assistant assistantWithPrompt = AiServices.builder(Assistant.class)
-                .chatModel(model)
-                .systemMessageProvider(obj -> "You are a history student")
-                .tools(new ConferenceTool())
-                .build();
-        System.out.println(assistantWithPrompt.chat("Give three German-speaking countries in Europe"));
-
-        // Example 3
+        // Example using AiServices and assistant
         System.out.println(assistant.chat("Get me a list of cool conference talks in 2024"));
+    }
 
-        costCalculator.printReport();
+
+    private static void chatEssentials(ChatModel model)
+    {
+        // step 1: construct the tool specifications
+        List<ToolSpecification> toolSpecifications = ToolSpecifications.toolSpecificationsFrom(ConferenceTool.class);
+
+        // step 2: first chat to analyze tools to use
+        UserMessage userMessage = UserMessage.from("Get list of cool conference talks in 2024");
+        ChatRequest request = ChatRequest.builder()
+                .messages(userMessage)
+                .toolSpecifications(toolSpecifications)
+                .build();
+        ChatResponse chatResponse = model.chat(request);
+        AiMessage aiMessage = chatResponse.aiMessage();
+
+        // step 3: prepare executing the tool
+        ToolExecutionRequest toolExecutionRequest = aiMessage.toolExecutionRequests().getFirst();
+        ToolExecutor defaultToolExecutor = new DefaultToolExecutor(new ConferenceTool(), ConferenceTool.class.getDeclaredMethods()[0]);
+        // step 4: call the tool
+        String executionResult = defaultToolExecutor.execute(toolExecutionRequest, "default");
+        // step 5: merge all results in one chat
+        ToolExecutionResultMessage toolExecutionResultMessage = ToolExecutionResultMessage.from(toolExecutionRequest, executionResult);
+        ChatRequest requestWithToolOutput = ChatRequest.builder()
+                .messages(List.of(userMessage, aiMessage, toolExecutionResultMessage))
+                .toolSpecifications(toolSpecifications)
+                .build();
+        ChatResponse responseWithToolResult = model.chat(requestWithToolOutput);
+        System.out.println(responseWithToolResult.aiMessage());
     }
 }
