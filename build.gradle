@@ -18,9 +18,9 @@ repositories {
 }
 
 dependencies {
-    implementation 'dev.langchain4j:langchain4j-core:1.1.0'
-    implementation 'dev.langchain4j:langchain4j-ollama:1.1.0-rc1'
-    implementation 'dev.langchain4j:langchain4j-mcp:1.1.0-beta7'
-    implementation 'io.modelcontextprotocol.sdk:mcp:0.10.0'
+    implementation 'dev.langchain4j:langchain4j-core:1.4.0'
+    implementation 'dev.langchain4j:langchain4j-ollama:1.4.0'
+    implementation 'dev.langchain4j:langchain4j-mcp:1.4.0-beta10'
+    implementation 'io.modelcontextprotocol.sdk:mcp:0.12.1'
     implementation 'org.slf4j:slf4j-simple:2.0.17'
 }
